@@ -1,0 +1,19 @@
+name: TEMPORAL - verificar expresion de matriz
+# Workflow desechable: comprueba que la expresion de matriz que se va a poner en
+# Nodus-Development/nodus (.github/workflows/ci.yml) expande lo que se espera.
+# Se borra en cuanto se verifique.
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch: {}
+jobs:
+  expandir:
+    name: os=${{ matrix.os }}
+    runs-on: ubuntu-latest # siempre ubuntu: solo se verifica la expansion, no el runner
+    strategy:
+      fail-fast: false
+      matrix:
+        os: ${{ fromJSON((github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && '["ubuntu-latest","macos-14","windows-latest"]' || '["ubuntu-latest"]') }}
+    steps:
+      - run: echo "evento=${{ github.event_name }}  os=${{ matrix.os }}"
