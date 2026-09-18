@@ -1,0 +1,75 @@
+name: Uptime de los dominios publicos
+# La landing estuvo caida 18 dias (2026-08-07 → 2026-08-25) sin que nadie se
+# enterara: no habia healthcheck continuo ni alertas.
+# Ver secretar-ia/docs/LANDING_RAILWAY_INCIDENTE.md (repo privado).
+#
+# Este workflow vive en un repo PUBLICO a proposito: los repos privados
+# consumen minutos de Actions de la cuota de la organizacion y GitHub factura
+# un minimo de 1 minuto por job. A 96 ejecuciones diarias eso eran ~1300
+# minutos al mes para 10 segundos de curl, y el 2026-09-18 agotaron la cuota
+# de la org (3013/3000): GitHub dejo de arrancar jobs en todos los repos y el
+# monitor se apago solo. Los repos publicos tienen minutos ilimitados gratis.
+on:
+  schedule:
+    - cron: '*/15 * * * *'
+  workflow_dispatch: {}
+jobs:
+  comprobar:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Comprobar endpoints
+        run: |
+          fallos=0
+
+          # Golpea /healthz y NUNCA /: la raiz esta cacheada en el borde de
+          # Cloudflare y devolveria 200 con el origen muerto, que es justo
+          # como pasaron 18 dias sin detectarlo. /healthz tiene regla de
+          # bypass de cache y Cache-Control: no-store.
+          #
+          # Hasta 3 intentos separados 5s: un blip transitorio de un runner no
+          # debe poner el run en rojo. Un monitor que da falsas alarmas se
+          # acaba ignorando, y entonces ya no es un monitor.
+          pedir() { # $1=url  $2=metodo
+            curl -s -m 15 -o /dev/null -w '%{http_code}' \
+              -X "$2" -H 'Cache-Control: no-cache' "$1" || echo 000
+          }
+
+          comprobar() { # $1=url  $2=codigos validos (separados por espacio)  $3=descripcion  $4=metodo (opcional)
+            metodo="${4:-GET}"
+            for intento in 1 2 3; do
+              code=$(pedir "$1" "$metodo")
+              for esperado in $2; do
+                if [ "$code" = "$esperado" ]; then
+                  if [ "$intento" = "1" ]; then
+                    echo "  ok    $3 -> $code"
+                  else
+                    echo "  ok    $3 -> $code (al intento $intento)"
+                  fi
+                  return 0
+                fi
+              done
+              [ "$intento" -lt 3 ] && sleep 5
+            done
+            echo "  FALLO $3 -> $code (esperado: $2)  [$metodo $1]"
+            fallos=$((fallos + 1))
+          }
+
+          echo "Origenes:"
+          comprobar https://secretar-ia.org/healthz        200 "landing"
+          comprobar https://app.secretar-ia.org/healthz    200 "app"
+          comprobar https://convex.secretar-ia.org/version 200 "convex"
+
+          # Si alguien reintroduce el fallback SPA con 404, esto se pone rojo
+          # el mismo dia en vez de degradar el SEO y la verificacion OAuth
+          # de Google en silencio.
+          echo "Rutas que deben devolver 200 (no 404):"
+          comprobar https://secretar-ia.org/precios 200 "landing /precios"
+          comprobar https://secretar-ia.org/privacy 200 "landing /privacy (requisito OAuth Google)"
+          comprobar https://secretar-ia.org/terms   200 "landing /terms"
+
+          # El escudo de Cloudflare debe seguir bloqueando escrituras.
+          echo "Escudo:"
+          comprobar https://secretar-ia.org/ "403 405" "POST rechazado" POST
+
+          echo "Fallos: $fallos"
+          exit $fallos
